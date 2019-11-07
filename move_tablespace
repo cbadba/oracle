@@ -1,0 +1,121 @@
+set echo off
+set heading off
+set feedback off
+set timing off time off
+set pages 0
+set line 200 
+spool script_to_moveNAME_OF_TABLESPACE.sql
+purge dba_recyclebin;
+select 'set echo on' from dual;
+select 'set timing on time on feedback on' from dual;
+select 'spool moveNAME_OF_TABLESPACE.out' from dual;
+
+select 'Whenever sqlerror exit SQL.SQLCODE' from dual;
+
+select 'INSERT INTO TCSDBA.ENC_SGMNT_CNT 
+(TABLESPACE_NAME, SEGMENT_TYPE, PRE_COUNT)
+select tablespace_name, segment_type, count(*) from dba_segments 
+where tablespace_name=''NAME_OF_TABLESPACE'' group by tablespace_name, 
+segment_type; ' from dual;
+
+SELECT 'INSERT INTO TCSDBA.ENC_SIZE_VAR
+(TABLESPACE_NAME, PRE_SIZE_GB)
+SELECT DISTINCT TABLESPACE_NAME, SUM(bytes/(1024*1024*1024)) SIZE_GB 
+FROM DBA_SEGMENTS WHERE TABLESPACE_NAME=''NAME_OF_TABLESPACE''
+GROUP BY TABLESPACE_NAME
+; ' from dual;
+
+
+SELECT 'ALTER TABLESPACE '||TABLESPACE_NAME||'  RENAME TO '||TABLESPACE_NAME||'_TOEN;' FROM DBA_TABLESPACES WHERE TABLESPACE_NAME NOT IN
+ (SELECT TABLESPACE_NAME FROM DBA_SEGMENTS WHERE OWNER NOT IN ( SELECT USERNAME FROM DBA_USERS WHERE PROFILE IN ('DOMAIN', 'APPLICATION')))
+ AND TABLESPACE_NAME='NAME_OF_TABLESPACE';
+
+ SELECT 'CREATE TABLESPACE   ' ||TABLESPACE_NAME||'    DATAFILE     
+' ||
+LISTAGG ('''+DATADG'''||' SIZE '||BYTES||' AUTOEXTEND ON MAXSIZE UNLIMITED ',',
+') WITHIN GROUP (ORDER BY FILE_ID)||'
+            encryption using ''AES256'' default storage (encrypt);'
+ FROM DBA_DATA_FILES WHERE TABLESPACE_NAME='NAME_OF_TABLESPACE' GROUP BY TABLESPACE_NAME ;
+
+select 'purge dba_recyclebin;' from dual;
+
+select 'alter user '||username||' default tablespace '||default_tablespace||';' from dba_users where default_tablespace='NAME_OF_TABLESPACE';
+
+select 'alter user '||username||' quota  unlimited on '||tablespace_name||';' from dba_ts_quotas where tablespace_name='NAME_OF_TABLESPACE';
+
+
+select 'alter table '||owner||'.'||table_name||' move tablespace '||tablespace_name||' parallel 6;'||CHR(10)||
+'Alter table '||owner||'.'||table_name||' parallel '||degree||';' from dba_tables where tablespace_name='NAME_OF_TABLESPACE'  ORDER BY num_rows;
+
+SELECT 'ALTER TABLE '||TABLE_OWNER||'.'||TABLE_NAME||' MOVE PARTITION '||PARTITION_NAME||' LOB('||COLUMN_NAME||')  STORE AS BASICFILE (TABLESPACE '||TABLESPACE_NAME||');'
+FROM DBA_LOB_PARTITIONS
+WHERE  TABLESPACE_NAME = 'NAME_OF_TABLESPACE' ;
+
+select 'alter table '||table_owner||'.'||table_name||' move subpartition ' ||subpartition_name|| ' tablespace  '||tablespace_name||';' from DBA_TAB_SUBPARTITIONS where tablespace_name='NAME_OF_TABLESPACE';
+
+select 'alter table '||owner||'.'||segment_name||' move partition ' ||partition_name|| ' tablespace '|| tablespace_name||';' from dba_segMEnts where tablespace_name='NAME_OF_TABLESPACE' AND SEGMENT_TYPE='TABLE PARTITION' ORDER BY BYTES;
+
+SELECT 'alter table '||OWNER||'.'||TABLE_NAME||' move lob ('||COLUMN_NAME||') store as '||SEGMENT_NAME||' ( tablespace NAME_OF_TABLESPACE);' FROM DBA_LOBS WHERE TABLESPACE_NAME='NAME_OF_TABLESPACE' AND PARTITIONED='NO';
+
+SELECT 'ALTER TABLE '||OWNER||'.'||TABLE_NAME||' modify default attributes  tablespace '||def_tablespace_name||';' from dba_part_tables where DEF_TABLESPACE_NAME='NAME_OF_TABLESPACE';
+
+select 'alter INDEX '||owner||'."'||index_name||'" REBUILD tablespace '||tablespace_name||' parallel 6;'||chr(10)||
+'Alter index  '||owner||'."'||index_name||'" parallel '||degree||';'from dba_indexes where tablespace_name='NAME_OF_TABLESPACE'  and degree > 0 order by num_rows;
+
+select 'alter INDEX '||owner||'."'||index_name||'" REBUILD tablespace '||tablespace_name||' parallel 6;' ||chr(10)||
+'Alter index  '||owner||'."'||index_name||'" parallel '||degree||';'
+ from dba_indexes where table_owner||table_name in
+((select owner||table_name from dba_tables where tablespace_name='NAME_OF_TABLESPACE') UNION (SELECT TABLE_OWNER||TABLE_NAME FROM DBA_TAB_PARTITIONS WHERE TABLESPACE_name='NAME_OF_TABLESPACE')
+) and tablespace_name <>'NAME_OF_TABLESPACE'
+and degree > 0;
+
+select 'alter index '||owner||'.'||segment_name||' rebuild partition ' ||partition_name|| ' tablespace '|| tablespace_name||';' from dba_segMEnts where tablespace_name='NAME_OF_TABLESPACE' AND SEGMENT_TYPE='INDEX PARTITION' and segment_NAME NOT LIKE 'SYS_%$$' ORDER BY BYTES;
+
+SELECT 'INSERT INTO TCSDBA.ENC_SGMNT_CNT2 
+(TABLESPACE_NAME, SEGMENT_TYPE, POST_COUNT2)
+select tablespace_name, segment_type, count(*) from dba_segments 
+where tablespace_name=''NAME_OF_TABLESPACE'' 
+group by tablespace_name, segment_type;' FROM DUAL;
+
+SELECT 'INSERT INTO TCSDBA.ENC_SIZE_VAR2
+(TABLESPACE_NAME, POST2_SIZE_GB)
+SELECT DISTINCT TABLESPACE_NAME, SUM(bytes/(1024*1024*1024)) SIZE_GB 
+FROM DBA_SEGMENTS
+WHERE TABLESPACE_NAME=''NAME_OF_TABLESPACE''
+GROUP BY TABLESPACE_NAME
+; ' from dual;
+
+select '
+UPDATE (SELECT * FROM TCSDBA.ENC_SGMNT_CNT A, TCSDBA.ENC_SGMNT_CNT2 B
+WHERE 
+A.TABLESPACE_NAME=B.TABLESPACE_NAME
+AND A.SEGMENT_TYPE=B.SEGMENT_TYPE
+AND B.TABLESPACE_NAME=''NAME_OF_TABLESPACE'')
+SET POST_COUNT=POST_COUNT2;'
+from dual;
+
+select '
+UPDATE (SELECT * FROM TCSDBA.ENC_SIZE_VAR A, TCSDBA.ENC_SIZE_VAR2 B
+WHERE
+A.TABLESPACE_NAME=B.TABLESPACE_NAME
+AND B.TABLESPACE_NAME=''NAME_OF_TABLESPACE'')
+SET POST_SIZE_GB=POST2_SIZE_GB;'
+from dual;
+
+select 'commit;' from dual;
+
+select 'select * from TCSDBA.ENC_SGMNT_CNT 
+where tablespace_name=''NAME_OF_TABLESPACE'';' from dual;
+
+select 'spool off' from dual;
+
+select 'exec dbms_lock.sleep(5);' from dual;
+
+select '@gen_inv_index.sql' from dual;
+
+select 'exec dbms_lock.sleep(5);' from dual;
+
+select '@gen_index_val.sql' from dual;
+
+spool off
+select 'script_to_moveNAME_OF_TABLESPACE.sql' from dual;
